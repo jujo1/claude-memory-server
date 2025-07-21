@@ -1,35 +1,12 @@
 #!/usr/bin/env node
 
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { WebSocketTransport } from '@modelcontextprotocol/sdk/server/websocket.js';
-import {
-  ListToolsRequestSchema,
-  CallToolRequestSchema,
-  ListResourcesRequestSchema,
-  ReadResourceRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
 import { WebSocketServer } from 'ws';
 import fs from 'fs/promises';
 
-class CloudMemoryServer {
+class SimpleMemoryServer {
   constructor() {
     this.memoryFile = process.env.MEMORY_FILE_PATH || './memory.json';
     this.memory = { entities: {}, relations: [], observations: {} };
-    this.server = new Server(
-      {
-        name: 'claude-cloud-memory',
-        version: '1.0.0',
-      },
-      {
-        capabilities: {
-          tools: {},
-          resources: {},
-        },
-      }
-    );
-    
-    this.setupHandlers();
     this.loadMemory();
   }
 
@@ -53,166 +30,86 @@ class CloudMemoryServer {
     }
   }
 
-  setupHandlers() {
-    // Tools
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: [
-        {
-          name: 'create_entities',
-          description: 'Create entities in the knowledge graph memory',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              entities: {
-                type: 'array',
-                items: {
+  async handleRequest(request) {
+    try {
+      const { method, params } = request;
+      
+      switch (method) {
+        case 'tools/list':
+          return {
+            tools: [
+              {
+                name: 'create_entities',
+                description: 'Create entities in the knowledge graph memory',
+                inputSchema: {
                   type: 'object',
                   properties: {
-                    name: { type: 'string' },
-                    entityType: { type: 'string' },
-                    observations: {
+                    entities: {
                       type: 'array',
-                      items: { type: 'string' }
+                      items: {
+                        type: 'object',
+                        properties: {
+                          name: { type: 'string' },
+                          entityType: { type: 'string' },
+                          observations: { type: 'array', items: { type: 'string' } }
+                        },
+                        required: ['name', 'entityType', 'observations']
+                      }
                     }
                   },
-                  required: ['name', 'entityType', 'observations']
+                  required: ['entities']
                 }
-              }
-            },
-            required: ['entities']
-          }
-        },
-        {
-          name: 'create_relations',
-          description: 'Create relations between entities',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              relations: {
-                type: 'array',
-                items: {
+              },
+              {
+                name: 'search_nodes',
+                description: 'Search for nodes in the knowledge graph',
+                inputSchema: {
                   type: 'object',
                   properties: {
-                    from: { type: 'string' },
-                    to: { type: 'string' },
-                    relationType: { type: 'string' }
+                    query: { type: 'string' }
                   },
-                  required: ['from', 'to', 'relationType']
+                  required: ['query']
                 }
+              },
+              {
+                name: 'read_graph',
+                description: 'Read the entire knowledge graph',
+                inputSchema: { type: 'object', properties: {} }
               }
-            },
-            required: ['relations']
-          }
-        },
-        {
-          name: 'add_observations',
-          description: 'Add observations to existing entities',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              observations: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  properties: {
-                    entityName: { type: 'string' },
-                    contents: {
-                      type: 'array',
-                      items: { type: 'string' }
-                    }
-                  },
-                  required: ['entityName', 'contents']
-                }
-              }
-            },
-            required: ['observations']
-          }
-        },
-        {
-          name: 'search_nodes',
-          description: 'Search for nodes in the knowledge graph',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              query: { type: 'string' }
-            },
-            required: ['query']
-          }
-        },
-        {
-          name: 'read_graph',
-          description: 'Read the entire knowledge graph',
-          inputSchema: {
-            type: 'object',
-            properties: {}
-          }
-        }
-      ]
-    }));
-
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
-      
-      try {
-        let result;
-        switch (name) {
-          case 'create_entities':
-            result = await this.createEntities(args.entities);
-            break;
-          case 'create_relations':
-            result = await this.createRelations(args.relations);
-            break;
-          case 'add_observations':
-            result = await this.addObservations(args.observations);
-            break;
-          case 'search_nodes':
-            result = await this.searchNodes(args.query);
-            break;
-          case 'read_graph':
-            result = await this.readGraph();
-            break;
-          default:
-            throw new Error(`Unknown tool: ${name}`);
-        }
-        
-        return { content: [{ type: 'text', text: result }] };
-      } catch (error) {
-        return { 
-          content: [{ 
-            type: 'text', 
-            text: `Error executing ${name}: ${error.message}` 
-          }] 
-        };
+            ]
+          };
+          
+        case 'tools/call':
+          return await this.handleToolCall(params);
+          
+        case 'initialize':
+          return {
+            protocolVersion: '2024-11-05',
+            capabilities: { tools: {}, resources: {} },
+            serverInfo: { name: 'claude-cloud-memory', version: '1.0.0' }
+          };
+          
+        default:
+          throw new Error(`Unknown method: ${method}`);
       }
-    });
+    } catch (error) {
+      return { error: { message: error.message } };
+    }
+  }
 
-    // Resources
-    this.server.setRequestHandler(ListResourcesRequestSchema, async () => ({
-      resources: [
-        {
-          uri: 'memory://graph',
-          name: 'Knowledge Graph',
-          description: 'Complete knowledge graph memory',
-          mimeType: 'application/json'
-        }
-      ]
-    }));
-
-    this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-      const { uri } = request.params;
-      
-      if (uri === 'memory://graph') {
-        return {
-          contents: [{
-            uri,
-            mimeType: 'application/json',
-            text: JSON.stringify(this.memory, null, 2)
-          }]
-        };
-      }
-      
-      throw new Error(`Unknown resource: ${uri}`);
-    });
+  async handleToolCall(params) {
+    const { name, arguments: args } = params;
+    
+    switch (name) {
+      case 'create_entities':
+        return await this.createEntities(args.entities);
+      case 'search_nodes':
+        return await this.searchNodes(args.query);
+      case 'read_graph':
+        return await this.readGraph();
+      default:
+        throw new Error(`Unknown tool: ${name}`);
+    }
   }
 
   async createEntities(entities) {
@@ -228,32 +125,12 @@ class CloudMemoryServer {
     }
     
     await this.saveMemory();
-    return `Created ${entities.length} entities successfully`;
-  }
-
-  async createRelations(relations) {
-    for (const relation of relations) {
-      this.memory.relations.push({
-        ...relation,
-        createdAt: new Date().toISOString()
-      });
-    }
-    
-    await this.saveMemory();
-    return `Created ${relations.length} relations successfully`;
-  }
-
-  async addObservations(observations) {
-    for (const obs of observations) {
-      const { entityName, contents } = obs;
-      
-      if (this.memory.entities[entityName]) {
-        this.memory.entities[entityName].observations.push(...contents);
-      }
-    }
-    
-    await this.saveMemory();
-    return `Added observations to ${observations.length} entities successfully`;
+    return { 
+      content: [{ 
+        type: 'text', 
+        text: `Created ${entities.length} entities successfully` 
+      }] 
+    };
   }
 
   async searchNodes(query) {
@@ -269,16 +146,12 @@ class CloudMemoryServer {
       }
     }
     
-    // Search relations
-    for (const relation of this.memory.relations) {
-      if (relation.from.toLowerCase().includes(lowerQuery) ||
-          relation.to.toLowerCase().includes(lowerQuery) ||
-          relation.relationType.toLowerCase().includes(lowerQuery)) {
-        results.push({ type: 'relation', ...relation });
-      }
-    }
-    
-    return `Found ${results.length} matching nodes:\n\n${JSON.stringify(results, null, 2)}`;
+    return {
+      content: [{
+        type: 'text',
+        text: `Found ${results.length} matching nodes:\n\n${JSON.stringify(results, null, 2)}`
+      }]
+    };
   }
 
   async readGraph() {
@@ -290,34 +163,54 @@ class CloudMemoryServer {
       )
     };
     
-    return `Knowledge Graph Contents:\n\nStatistics:\n${JSON.stringify(stats, null, 2)}\n\nFull Graph:\n${JSON.stringify(this.memory, null, 2)}`;
+    return {
+      content: [{
+        type: 'text',
+        text: `Knowledge Graph Contents:\n\nStatistics:\n${JSON.stringify(stats, null, 2)}\n\nFull Graph:\n${JSON.stringify(this.memory, null, 2)}`
+      }]
+    };
   }
 }
 
-// Determine if we're running via stdio or WebSocket
-const isWebSocket = process.env.PORT || process.argv.includes('--websocket');
-
 async function main() {
-  const memoryServer = new CloudMemoryServer();
+  const memoryServer = new SimpleMemoryServer();
+  const port = process.env.PORT || 3000;
   
-  if (isWebSocket) {
-    // WebSocket server for cloud deployment
-    const port = process.env.PORT || 3000;
-    const wss = new WebSocketServer({ port });
+  const wss = new WebSocketServer({ port });
+  
+  wss.on('connection', (ws) => {
+    console.log('New WebSocket connection established');
     
-    wss.on('connection', (ws) => {
-      console.log('New WebSocket MCP connection');
-      const transport = new WebSocketTransport(ws);
-      memoryServer.server.connect(transport);
+    ws.on('message', async (data) => {
+      try {
+        const request = JSON.parse(data.toString());
+        console.log('Received request:', request.method);
+        
+        const response = await memoryServer.handleRequest(request);
+        
+        ws.send(JSON.stringify({
+          jsonrpc: '2.0',
+          id: request.id,
+          result: response
+        }));
+      } catch (error) {
+        console.error('Error handling request:', error);
+        ws.send(JSON.stringify({
+          jsonrpc: '2.0',
+          id: request.id || null,
+          error: { code: -32603, message: error.message }
+        }));
+      }
     });
     
-    console.log(`Cloud Memory MCP Server running on WebSocket port ${port}`);
-    console.log(`Connect using: wss://memory-server-production.up.railway.app`);
-  } else {
-    // Stdio for local usage
-    const transport = new StdioServerTransport();
-    await memoryServer.server.connect(transport);
-  }
+    ws.on('close', () => {
+      console.log('WebSocket connection closed');
+    });
+  });
+  
+  console.log(`🚀 Cloud Memory Server running on port ${port}`);
+  console.log(`📡 WebSocket URL: wss://memory-server-production.up.railway.app`);
+  console.log(`🧠 Memory will be persisted to: ${process.env.MEMORY_FILE_PATH || './memory.json'}`);
 }
 
 main().catch(console.error);
