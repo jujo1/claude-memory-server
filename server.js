@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport, WebSocketTransport } from '@modelcontextprotocol/sdk/server/index.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { WebSocketTransport } from '@modelcontextprotocol/sdk/server/websocket.js';
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
@@ -10,7 +11,6 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { WebSocketServer } from 'ws';
 import fs from 'fs/promises';
-import path from 'path';
 
 class CloudMemoryServer {
   constructor() {
@@ -312,7 +312,7 @@ async function main() {
     });
     
     console.log(`Cloud Memory MCP Server running on WebSocket port ${port}`);
-    console.log(`Connect using: wss://your-app.railway.app`);
+    console.log(`Connect using: wss://memory-server-production.up.railway.app`);
   } else {
     // Stdio for local usage
     const transport = new StdioServerTransport();
